@@ -1,76 +1,85 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Wind CFD Engine", layout="wide")
-st.markdown("## 🌪️ Real-Time Computational Fluid Dynamics (CFD)")
-st.markdown("Adjust parameters to visualize aerodynamic flow around complex geometry.")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Wind Chisel 3D", layout="wide", page_icon="🏗️")
 
 # --- SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.header("⚙️ Design Parameters")
-    wind_speed = st.slider("Wind Velocity (m/s)", 10, 100, 45)
-    tower_twist = st.slider("Tower Twist (Radians)", 0.0, 3.0, 1.5)
-    resolution = st.select_slider("Simulation Resolution", options=["Low", "High"], value="Low")
+    st.header("🎛️ Parametric Controls")
+    
+    # 1. The Force (Wind)
+    wind_velocity = st.slider("💨 Wind Velocity (m/s)", 10, 100, 45)
+    
+    # 2. The Resistance (Structure)
+    material_strength = st.slider("🧱 Panel Resistance", 1000, 5000, 3000)
     
     st.divider()
-    pressure = 0.613 * wind_speed**2
-    st.metric("Dynamic Pressure", f"{int(pressure)} Pa", delta=f"{wind_speed} m/s")
-
-# --- SIMULATION LOGIC ---
-def generate_simulation(twist, velocity):
-    # 1. Generate Building Geometry
-    height = 100
-    radius = 15
-    z = np.linspace(0, height, 50)
-    theta = np.linspace(0, twist, 50) 
     
-    theta_grid, z_grid = np.meshgrid(np.linspace(0, 2*np.pi, 30), z)
-    twist_matrix = z_grid * (twist / height)
-    b_x = radius * np.cos(theta_grid + twist_matrix)
-    b_y = radius * np.sin(theta_grid + twist_matrix)
+    # Real-Time Math
+    pressure = 0.613 * wind_velocity**2
+    st.metric("Dynamic Wind Pressure", f"{int(pressure)} Pa")
     
-    # 2. Generate Wind Field
-    x_vals = np.linspace(-40, 40, 15)
-    y_vals = np.linspace(-40, 40, 15)
-    z_vals = np.linspace(10, 90, 8)
+    if pressure > material_strength:
+        st.error("⚠️ CRITICAL FAILURE: EROSION ACTIVE")
+    else:
+        st.success("✅ SYSTEM STABLE")
+
+# --- MAIN 3D VIEW ---
+st.title("🏗️ THE WIND CHISEL: Real-Time Form Finding")
+st.markdown("This tool **removes** facade panels that exceed their structural capacity, automatically sculpting an aerodynamic form.")
+
+# --- GENERATE THE BUILDING (VOXELS) ---
+def generate_tower(velocity, strength):
+    # 1. Create a 3D Grid of Points (10x10x20 tower)
+    x, y, z = np.indices((10, 10, 20))
     
-    y, z, x = np.meshgrid(y_vals, z_vals, x_vals)
+    # Flatten the grid to arrays
+    x = x.flatten()
+    y = y.flatten()
+    z = z.flatten()
     
-    # Potential Flow Logic (Deflecting wind around cylinder)
-    r = np.sqrt(x**2 + y**2)
-    mask = r > radius # Only calculate outside building
+    # 2. Calculate Wind Load on EACH Panel (Physics)
+    # Wind gets stronger with height (Power Law)
+    height_factor = (z / 20) ** 0.5
+    local_pressure = (0.613 * velocity**2) * height_factor * 1.5
     
-    u = np.ones_like(x) * velocity
-    v = np.zeros_like(x)
-    w = np.zeros_like(x)
+    # 3. The "Chisel" Logic (Erosion)
+    # Only keep panels where Pressure < Strength
+    # (Or keep the core structure so it doesn't vanish completely)
+    core_structure = (x > 3) & (x < 6) & (y > 3) & (y < 6) # The concrete core
+    surviving_panels = (local_pressure < strength) | core_structure
     
-    # Apply Bernoulli Deflection
-    u[mask] = velocity * (1 - (radius**2 / r[mask]**2) * np.cos(2 * np.arctan2(y[mask], x[mask])))
-    v[mask] = -velocity * (1 + (radius**2 / r[mask]**2)) * np.sin(2 * np.arctan2(y[mask], x[mask]))
-    w[mask] = (z[mask] / 100) * 5 * np.cos(x[mask] * 0.1) # Turbulence
-    
-    return b_x, b_y, z_grid, x[mask], y[mask], z[mask], u[mask], v[mask], w[mask]
+    return x[surviving_panels], y[surviving_panels], z[surviving_panels], local_pressure[surviving_panels]
 
-# --- RENDERER ---
-b_x, b_y, b_z, wx, wy, wz, wu, wv, ww = generate_simulation(tower_twist, wind_speed)
+# Get the data based on YOUR sliders
+x, y, z, pressure_data = generate_tower(wind_velocity, material_strength)
 
-fig = plt.figure(figsize=(10, 8))
-ax = fig.add_subplot(projection='3d')
+# --- PLOTLY 3D RENDERER ---
+fig = go.Figure(data=[go.Scatter3d(
+    x=x, y=y, z=z,
+    mode='markers',
+    marker=dict(
+        size=6,
+        color=pressure_data,       # Color by Wind Pressure
+        colorscale='Jet',          # Red = High Stress, Blue = Low
+        opacity=0.8,
+        symbol='square'            # Looks like facade panels
+    )
+)])
 
-# Plot Building
-ax.plot_surface(b_x, b_y, b_z, color='#2c3e50', alpha=0.9, edgecolor='white', linewidth=0.2)
+# Styling to make it look like Engineering Software
+fig.update_layout(
+    scene=dict(
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        zaxis=dict(visible=False),
+        aspectmode='data'
+    ),
+    margin=dict(l=0, r=0, b=0, t=0),
+    height=700,
+    paper_bgcolor='black' # Dark Mode
+)
 
-# Plot Wind Flow
-velocity_mag = np.sqrt(wu**2 + wv**2 + ww**2)
-ax.quiver(wx, wy, wz, wu, wv, ww, length=5, normalize=True, cmap='jet', array=velocity_mag, alpha=0.6)
-
-# Styling
-ax.set_facecolor('black') 
-fig.patch.set_facecolor('black')
-ax.axis('off')
-ax.set_title(f"AERODYNAMIC INTERACTION | Re: {int(wind_speed*1000)}", color='white')
-
-# Display
-st.pyplot(fig)
+st.plotly_chart(fig, use_container_width=True)
